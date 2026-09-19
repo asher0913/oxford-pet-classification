@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "oxford-pet-classification"
+version = "0.2.0"
+description = "Oxford-IIIT Pet classification with a custom residual CNN, transfer learning, EMA, TTA, and Grad-CAM."
+requires-python = ">=3.10"
+dependencies = [
+  "torch>=2.2",
+  "torchvision>=0.17",
+  "numpy>=1.24",
+  "matplotlib>=3.7",
+  "scikit-learn>=1.3",
+  "seaborn>=0.13",
+  "pillow>=10.0",
+  "tqdm>=4.66",
+]
+
+[tool.setuptools.package-dir]
+"" = "src"
+
+[tool.setuptools.packages.find]
+where = ["src"]
