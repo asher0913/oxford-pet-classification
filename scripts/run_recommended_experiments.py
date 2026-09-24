@@ -1,11 +1,11 @@
 """Run the full ablation sweep reported in the project.
 
-custom-model track (rows A-G): progressive single-variable ablation on the custom CNN,
+Custom CNN (rows A-G): progressive single-variable ablation trained from scratch,
 starting from a bare baseline and adding one technique per row.
-transfer-learning track (rows H-J): frozen vs fine-tuned ResNet-18, plus the best-effort
+Transfer learning (rows H-J): frozen vs fine-tuned ResNet-18, plus the best-effort
 fine-tune+EMA run for the headline number.
 
-80 epochs for custom-model track, and 15 for transfer-learning track.
+80 epochs for the custom CNN, and 15 for transfer learning.
 """
 
 from __future__ import annotations
@@ -162,7 +162,7 @@ def build_experiments(
     ]
 
     return [
-        # ---- custom-model track: progressive single-variable ablation ----
+        # ---- custom CNN: progressive single-variable ablation ----
         {
             "name": "custom_baseline",
             "args": [
@@ -263,7 +263,7 @@ def build_experiments(
                 "--tta",
             ],
         },
-        # ---- transfer-learning track: freeze vs fine-tune on ResNet-18 ----
+        # ---- transfer learning: freeze vs fine-tune on ResNet-18 ----
         {
             "name": "transfer_resnet18_frozen",
             "args": [
@@ -318,10 +318,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--num-workers", type=int, default=4,
                         help="DataLoader worker processes per run.")
     parser.add_argument("--custom-epochs", type=int, default=80,
-                        help="Epochs for each custom-model track run. 30 epochs left the from-scratch "
+                        help="Epochs for each custom-CNN run. 30 epochs left the from-scratch "
                              "CNN clearly underfit, so I raised the budget to 80.")
     parser.add_argument("--transfer-epochs", type=int, default=15,
-                        help="Epochs for each transfer-learning track run. Pretrained features converge fast.")
+                        help="Epochs for each transfer-learning run. Pretrained features converge fast.")
     parser.add_argument("--only", nargs="+", default=None,
                         help="Subset of experiment names to run (default: all).")
     parser.add_argument("--dry-run", action="store_true",
@@ -364,7 +364,7 @@ def find_latest_run_dir(output_dir: Path, experiment_name: str) -> Path | None:
 
 VIS_MODULE = "pet_classifier.visualize"
 
-# Only render grids for the two headline models (best custom-model track and best transfer-learning track).
+# Only render grids for the two headline models (best custom CNN and best transfer-learning model).
 VISUALISATION_TARGETS = (
     "custom_full_ema",
     "transfer_resnet18_finetune_ema",
@@ -434,7 +434,7 @@ def plot_ablation_chart(rows: list[dict], output_dir: Path) -> Path | None:
         print(f"  [chart] matplotlib unavailable ({exc}); skipping ablation_chart.png.")
         return None
 
-    # preserve definition order so the chart reads A→G→transfer-learning track, same as the report
+    # preserve definition order so the chart reads A→G→H→J, as in the README
     ordered = [row for row in rows if "experiment_name" in row]
     if not ordered:
         return None

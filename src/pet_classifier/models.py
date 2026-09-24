@@ -1,10 +1,10 @@
 """Model definitions.
 
-PetResNet is the custom CNN for custom-model track - residual blocks with SE
+PetResNet is the from-scratch custom CNN - residual blocks with SE
 channel attention, ~2.7M params. It is kept small because the training
 set is only ~3k images after the val split.
 
-The transfer learning helpers wrap torchvision models for transfer-learning track:
+The transfer learning helpers wrap torchvision models:
 swap the classifier for a 37-way layer, optionally freeze the backbone,
 and split params into backbone vs head groups so the head can use a
 larger LR (10x by default).
@@ -120,7 +120,7 @@ class BasicResBlock(nn.Module):
 
 
 # ---------------------------------------------------------------------------
-# PetResNet: the custom CNN (custom-model track)
+# PetResNet: the custom CNN, trained from scratch
 # ---------------------------------------------------------------------------
 
 
@@ -213,7 +213,7 @@ class PetResNet(nn.Module):
 
 
 # ---------------------------------------------------------------------------
-# Transfer learning wrappers (transfer-learning track)
+# Transfer learning wrappers
 # ---------------------------------------------------------------------------
 
 
@@ -288,7 +288,7 @@ def build_model(
     model_name = model_name.lower()
 
     if model_name == "custom":
-        # The custom CNN is always trained from scratch for custom-model track.
+        # The custom CNN is always trained from scratch.
         model = PetResNet(num_classes=num_classes, dropout=dropout)
         return ModelInfo(
             model=model,

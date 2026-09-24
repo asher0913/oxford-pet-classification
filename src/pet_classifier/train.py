@@ -1,4 +1,4 @@
-"""Training script for custom-CNN and transfer-learning tracks.
+"""Training script for the from-scratch custom CNN and the transfer-learning models.
 
 Same loop is used for the custom CNN and the transfer learning models,
 the difference is just how the model gets built. All settings come from
@@ -58,7 +58,7 @@ def parse_args() -> argparse.Namespace:
     # --- Model ---
     parser.add_argument("--model", default="custom", choices=MODEL_CHOICES,
                         help="Model architecture to train.")
-    # default False so a custom-model track run can never accidentally end up pretrained
+    # default False so a from-scratch run can never accidentally end up pretrained
     parser.add_argument("--pretrained", action=argparse.BooleanOptionalAction,
                         default=False,
                         help="Use ImageNet weights for transfer models. Ignored for custom.")
@@ -381,7 +381,7 @@ def main() -> None:
     )
 
     model_info = build_model(
-        # The flags are ignored for the custom CNN so custom-model track stays from scratch.
+        # The flags are ignored for the custom CNN so it stays from scratch.
         model_name=args.model,
         num_classes=args.num_classes,
         pretrained=bool(args.pretrained and args.model != "custom"),

@@ -1,420 +1,153 @@
 # Oxford-IIIT Pet Classification
 
-An end-to-end PyTorch project for fine-grained classification across 37 cat
-and dog breeds. It compares a custom residual CNN trained from scratch with
-transfer-learning baselines, and includes reproducible ablations, checkpoint
-evaluation, batch inference, and Grad-CAM visualizations.
+[![Model utility tests](https://github.com/asher0913/oxford-pet-classification/actions/workflows/ci.yml/badge.svg)](https://github.com/asher0913/oxford-pet-classification/actions/workflows/ci.yml)
+![Python](https://img.shields.io/badge/python-3.10%2B-blue)
+![PyTorch](https://img.shields.io/badge/PyTorch-2.2%2B-ee4c2c)
 
-Two modeling tracks share the same data and evaluation pipeline:
+Fine-grained classification of 37 cat and dog breeds, about 80 training images per class. This
+PyTorch project compares two models on the same split and pipeline:
 
-* **Transfer learning.** Pretrained torchvision networks
-  (ResNet, VGG, MobileNet). Two strategies are supported: feature
-  extraction with a frozen backbone, and full fine-tuning with
-  differential learning rates.
-* **Custom model.** `PetResNet`, a residual network with
-  Squeeze-and-Excite channel attention designed specifically for
-  this dataset. Trained from scratch, no pretrained weights.
+- **PetResNet**, a 2.78 M-parameter residual CNN with squeeze-and-excite attention, trained from
+  scratch;
+- **ResNet-18** pretrained on ImageNet, either as a frozen feature extractor or fully fine-tuned
+  with differential learning rates.
 
-The reported experiment used a deterministic 80/20 split of the official
-training data and kept the official test split isolated until final
-evaluation. The best fine-tuned ResNet-18 reached **89.8% test accuracy**
-with EMA and horizontal-flip TTA. The best custom model reached **49.7% test
-accuracy**, providing a clear from-scratch baseline for the transfer-learning
-comparison.
+A progressive ablation adds one training technique per row, so each change in accuracy can be
+traced to a single technique.
 
-## Project layout
+**Headline:** the fine-tuned ResNet-18 reaches **89.8% test accuracy** (EMA + flip TTA). The
+from-scratch PetResNet reaches **49.7%**, 18× chance, with no pretraining, segmentation masks or
+extra data.
 
-```
-oxford-pet-classification/
-├── README.md
-├── pyproject.toml
-├── requirements.txt
-├── scripts/
-│   └── run_recommended_experiments.py
-└── src/pet_classifier/
-    ├── __init__.py
-    ├── data.py          # dataset, train/val split, transforms, test loader
-    ├── ema.py           # bias-corrected exponential moving average
-    ├── models.py        # PetResNet, transfer wrappers, differential LR helper
-    ├── train.py         # CLI training entry point
-    ├── evaluate.py      # re-score a checkpoint on val + test
-    ├── predict.py       # top-k inference on files or a folder
-    ├── visualize.py     # prediction grids + Grad-CAM grids
-    ├── gradcam.py       # from-scratch Grad-CAM implementation
-    └── utils.py         # seeding, metrics, plotting, checkpoint helpers
-```
+![Validation and test accuracy for all ten runs](docs/ablation_chart.png)
 
-## Setup
+## Results
 
-From inside this folder:
+The trainval split (3,680 images) is split 80/20 into train and validation with a fixed seed.
+Checkpoints are selected on validation, and the official test split (3,669 images) is scored
+once per run, at the end.
 
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade pip
-```
+| Row | Run | Change from the previous row | Val | Test | Test, flip TTA |
+|---|---|---|---:|---:|---:|
+| A | custom baseline | no augmentation, constant LR | 44.16% | 35.19% | |
+| B | | + strong augmentation (RandomResizedCrop, TrivialAugmentWide, RandomErasing) | 50.14% | 43.99% | |
+| C | | + 3-epoch warm-up, cosine LR | 49.59% | 46.88% | |
+| D | | + weight decay 1e-4 | 50.95% | 47.40% | |
+| **E** | **best from scratch** | + label smoothing 0.1 | **54.89%** | **49.69%** | 49.66% |
+| F | | + Mixup α = 0.2 | 50.68% | 48.41% | |
+| G | | E + EMA, cosine LR floor, TTA | 54.08% | 48.49% | 48.98% |
+| H | ResNet-18, frozen backbone | only the 19 k-parameter head trains | 89.67% | 87.30% | |
+| I | ResNet-18, full fine-tune | backbone LR 1e-4, head 1e-3 | 92.12% | 88.93% | |
+| **J** | **best overall** | I + EMA, cosine LR floor | **92.53%** | 88.91% | **89.78%** |
 
-Install a CUDA-compatible PyTorch build that matches the target
-machine. The command below works on CUDA 12.1; substitute the right
-index URL from https://pytorch.org/get-started/locally/ for other
-CUDA versions.
+Custom-CNN runs train for 80 epochs; ResNet-18 runs for 15. The full sweep of ten runs takes
+about 40 minutes on one RTX 5880 Ada.
 
-```bash
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
-pip install -r requirements.txt
-pip install -e .
-```
+- **Augmentation is the biggest lever.** Going from A to B adds 8.8 points of test accuracy.
+  With about 80 images per class, a from-scratch CNN memorises the training set without it.
+- **The cosine schedule helps test accuracy, not validation.** It costs 0.5 points of validation
+  accuracy (C vs. B) and gains 2.9 points on test; the 736-image validation split is too small
+  to show it. Weight decay and label smoothing then add 0.5 and 2.3 points.
+- **Mixup hurts on small fine-grained data.** It costs 4.2 points of validation and 1.3 of test
+  accuracy (F vs. E). Interpolating two breeds blurs cues that are already subtle.
+- **EMA and TTA only help when they fit the setting.** With decay 0.9999 the EMA window
+  (~10,000 steps) is longer than the whole custom run (3,680 steps), so the shadow weights lag
+  (52.2% vs. 54.1% raw validation); row G reports the raw checkpoint. Flip TTA does nothing for
+  the custom CNN, which already learned flip invariance from augmentation. It adds 0.87 points
+  to the fine-tuned ResNet-18, which had not.
+- **Pretraining is worth about 40 points here.** ResNet-18 starts from 1.28 M ImageNet images;
+  PetResNet sees 2,944.
 
-Quick sanity check:
+| Custom CNN (E): training curves | ResNet-18 (J): training curves |
+|---|---|
+| ![](docs/curves_custom_E.png) | ![](docs/curves_resnet18_J.png) |
 
-```bash
-python - <<'PY'
-import torch
-print("CUDA available:", torch.cuda.is_available())
-print("Device:", torch.cuda.get_device_name(0) if torch.cuda.is_available() else "CPU")
-PY
-```
+| Custom CNN (E): test confusion matrix | ResNet-18 + TTA (J): test confusion matrix |
+|---|---|
+| ![](docs/confusion_custom_E.png) | ![](docs/confusion_resnet18_J.png) |
 
-If `torch.cuda.is_available()` is `False`, reinstall `torch` with
-the CUDA build that matches the installed driver.
+Most of ResNet-18's remaining errors are between breeds people also confuse: Ragdoll and Birman,
+American Pit Bull and Staffordshire Bull Terrier, British Shorthair and Russian Blue. The
+from-scratch model's errors are spread more widely, even between less similar breeds. Grad-CAM
+from the last convolutional stage (implemented from scratch in `gradcam.py`) shows ResNet-18
+attending to the head and body, not the background:
 
-### Dataset setup on servers without internet
+![Grad-CAM overlays on correctly classified test images](docs/gradcam_resnet18_J.jpg)
 
-The recommended script passes `--download`, so torchvision will try
-to fetch Oxford-IIIT Pet automatically. If the GPU machine has no
-internet access or DNS, the training process will raise an error
-of the form:
+## Model
 
-```text
-Temporary failure in name resolution
-urllib.error.URLError
-```
+| Stage | Layers | Output |
+|---|---|---|
+| Stem | Conv3×3(32), BN, ReLU (stride 1) | 224² × 32 |
+| Stage 1 | 2 × ResBlock(32→64), first with stride 2 | 112² × 64 |
+| Stage 2 | 2 × ResBlock(64→128) + squeeze-and-excite | 56² × 128 |
+| Stage 3 | 2 × ResBlock(128→256) + squeeze-and-excite | 28² × 256 |
+| Head | global average pool, dropout 0.3, Linear(256, 37) | 37 |
 
-That is a server network problem, not a training-code problem. In
-that case, download the two archives on another machine and copy
-them to the server:
+The stride-1 stem keeps fine detail (ear shape, facial structure, fur pattern) that separates
+similar breeds. Downsampling happens inside the first block of each stage. Squeeze-and-excite
+gating sits only in the deeper stages, where channels carry semantic features. Global average
+pooling keeps the classifier at 9.5 k parameters.
 
-```text
-https://www.robots.ox.ac.uk/~vgg/data/pets/data/images.tar.gz
-https://www.robots.ox.ac.uk/~vgg/data/pets/data/annotations.tar.gz
-```
-
-Then prepare the expected torchvision folder:
+## Usage
 
 ```bash
-cd oxford-pet-classification
-mkdir -p data/oxford-iiit-pet
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121   # match your CUDA
+pip install -r requirements.txt && pip install -e .
 
-# Put images.tar.gz and annotations.tar.gz in data/oxford-iiit-pet first.
-tar -xzf data/oxford-iiit-pet/images.tar.gz -C data/oxford-iiit-pet
-tar -xzf data/oxford-iiit-pet/annotations.tar.gz -C data/oxford-iiit-pet
+python scripts/run_recommended_experiments.py            # all ten runs, then the summary chart and Grad-CAM grids
+python scripts/run_recommended_experiments.py --only custom_baseline custom_aug --custom-epochs 10
+python scripts/run_recommended_experiments.py --dry-run  # print the commands
 ```
 
-Expected final structure:
-
-```text
-data/oxford-iiit-pet/images/*.jpg
-data/oxford-iiit-pet/annotations/trainval.txt
-data/oxford-iiit-pet/annotations/test.txt
-```
-
-Once those files exist, rerun:
+One run, for example the best fine-tuned model (row J):
 
 ```bash
-python scripts/run_recommended_experiments.py
+python -m pet_classifier.train --experiment-name transfer_resnet18_finetune_ema \
+  --model resnet18 --pretrained --image-size 224 --batch-size 32 --epochs 15 --augmentation basic \
+  --optimizer adamw --lr 1e-4 --head-lr-mult 10 --weight-decay 1e-4 --scheduler cosine --warmup-epochs 1 \
+  --label-smoothing 0.1 --ema --ema-decay 0.999 --min-lr 1e-5 --tta --download --amp --test-at-end
 ```
 
-## Run the experiment suite
-
-One Python driver runs the full custom-model track ablation (seven custom-CNN
-runs, 80 epochs each) and all three transfer-learning track transfer runs
-(frozen / fine-tune / fine-tune + EMA, 15 epochs each). Ten runs in
-total. On an RTX 3090 it is roughly 85 minutes; on older cards it
-takes longer.
-
-The last custom-CNN row (`custom_full_ema`) and the last transfer
-row (`transfer_resnet18_finetune_ema`) add three extra training /
-inference tricks on top of the previous row:
-
-* **EMA** — an exponential moving average of model weights (Polyak
-  averaging). The shadow weights are used for validation and saved
-  as `best_model.pt`. The decay uses
-  `eff_decay = min(decay, (1+n)/(10+n))` so during the first few
-  hundred updates the shadow is not dominated by the random Kaiming
-  init. The raw training weights are also saved to
-  `best_model_raw.pt` whenever EMA is on, as a backup. When EMA is
-  active `history.csv` logs `val_acc` (shadow) and `val_acc_raw`
-  (raw training weights) side by side, so any per-epoch divergence
-  between them is visible.
-* **`min_lr = 1e-5`** — non-zero floor on the cosine schedule so the
-  last few epochs still make small updates instead of effectively
-  stopping.
-* **Horizontal-flip TTA** — at the final `--test-at-end` evaluation,
-  predictions are averaged over the image and its left-right flip.
-  Training itself is unchanged. `summary.json` records both
-  `test_acc` and `test_acc_tta` so the with-vs-without-TTA
-  comparison is available afterwards.
-
-None of EMA, TTA or `min_lr` adds pretrained weights or changes the
-architecture, so custom-model track stays a from-scratch custom CNN and transfer-learning track
-still uses one of the permitted torchvision architectures.
+Re-score a checkpoint, render prediction and Grad-CAM grids, or predict on your own images:
 
 ```bash
-python scripts/run_recommended_experiments.py
+python -m pet_classifier.evaluate  --checkpoint outputs/<run>/best_model.pt
+python -m pet_classifier.visualize --checkpoint outputs/<run>/best_model.pt --split test --filter incorrect
+python -m pet_classifier.predict   --checkpoint outputs/<run>/best_model.pt --input photos/ --top-k 5
 ```
 
-Override locations, worker count, or run only part of the sweep:
+Each run writes `outputs/<name>_<timestamp>/` with:
 
-```bash
-python scripts/run_recommended_experiments.py \
-    --data-dir /mnt/data \
-    --output-dir /mnt/out \
-    --num-workers 8
+- the best, last and (with EMA) raw checkpoints;
+- `run_config.json` and `history.csv`;
+- training curves;
+- validation and test confusion matrices, classification reports and per-class accuracy;
+- `summary.json`.
 
-python scripts/run_recommended_experiments.py \
-    --only custom_baseline custom_aug
+The sweep adds `outputs/ablation_summary.{csv,json}` and a chart. Checkpoints are not committed;
+see `weights/README.md`.
 
-python scripts/run_recommended_experiments.py --dry-run
-```
+**Without internet on the training machine**, download `images.tar.gz` and
+`annotations.tar.gz` from the [dataset page](https://www.robots.ox.ac.uk/~vgg/data/pets/). Extract
+them into `data/oxford-iiit-pet/`, so that `images/*.jpg` and `annotations/trainval.txt` exist.
 
-Epoch counts can also be overridden on the driver, for a quick
-smoke test with fewer epochs or for a longer run than the defaults:
+## Implementation notes
 
-```bash
-python scripts/run_recommended_experiments.py \
-    --custom-epochs 80 --transfer-epochs 15
-```
+- **EMA with bias-corrected decay.** The decay is `min(decay, (1 + n) / (10 + n))`. A fixed 0.999
+  from the first step left about 2.5% of the random initialisation in the shadow weights and cost
+  about 7 points of validation accuracy. `tests/test_model_ema.py` locks the schedule in, and
+  also checks that integer BatchNorm buffers are copied, not averaged.
+- **No test-set model selection.** The test split is scored only with `--test-at-end`, after
+  the best-validation checkpoint is chosen.
+- **Deterministic splits.** The seed is 42; `--deterministic` also fixes cuDNN algorithms.
+- The code is in `src/pet_classifier/`: `data`, `models` (PetResNet and the transfer wrappers
+  with differential learning rates), `train`, `evaluate`, `predict`, `visualize`, `gradcam`, `ema`
+  and `utils`.
 
-The driver runs `python -m pet_classifier.train` as a subprocess for each
-experiment, so it uses exactly the same training code as the
-individual commands shown below.
+## Limitations
 
-## Generated artifacts
-
-A run named `foo` creates `outputs/foo_<timestamp>/` with:
-
-| File                                     | What it is                                            |
-| ---------------------------------------- | ----------------------------------------------------- |
-| `best_model.pt`                          | Checkpoint with the highest validation accuracy       |
-| `last_model.pt`                          | Final checkpoint after the last epoch                 |
-| `run_config.json`                        | All CLI args plus class names and split sizes         |
-| `history.csv`                            | Per-epoch loss, accuracy and learning rate            |
-| `training_curves.png`                    | Loss and accuracy curves                              |
-| `validation_confusion_matrix.png` / csv  | Best-epoch confusion matrix on the validation split   |
-| `validation_classification_report.txt`   | Per-class precision / recall / F1 (validation)        |
-| `validation_per_class_accuracy.png`      | Per-class accuracy bar chart (validation)             |
-| `test_confusion_matrix.png` / csv        | Confusion matrix on the official test split          |
-| `test_classification_report.txt`         | Per-class precision / recall / F1 (test)              |
-| `test_per_class_accuracy.png`            | Per-class accuracy bar chart (test)                   |
-| `test_tta_confusion_matrix.png` / csv    | TTA confusion matrix (only when `--tta` was used)     |
-| `test_tta_classification_report.txt`     | Per-class report under TTA (only when `--tta` was used) |
-| `test_tta_per_class_accuracy.png`        | Per-class accuracy bar chart under TTA                |
-| `summary.json`                           | Best val accuracy, test accuracy (and TTA test accuracy), best model path |
-
-Test-set artifacts only appear if the run used `--test-at-end`,
-which the recommended driver does for every experiment.
-
-Once every run in the sweep has finished, the driver also writes
-three project-level artifacts plus a visualisation folder next to
-each headline checkpoint:
-
-| Artifact                                   | What it is                                           |
-| ------------------------------------------ | ---------------------------------------------------- |
-| `outputs/ablation_summary.csv`             | One row per experiment with every headline number   |
-| `outputs/ablation_summary.json`            | Same information in JSON, easier to parse in notebooks |
-| `outputs/ablation_chart.png`               | Grouped bar chart of val / test accuracy across the full sweep |
-| `outputs/custom_full_ema_*/visualisation/`     | Prediction grids + Grad-CAM overlays for the custom-model track best model (val/test × correct/incorrect) |
-| `outputs/transfer_resnet18_finetune_ema_*/visualisation/` | Same four grids for the transfer-learning track best model |
-
-Between these files the run folders give per-experiment confusion
-matrices and training curves, `ablation_chart.png` gives the overall
-val/test comparison, and the `visualisation/` folders contain the
-Grad-CAM grids for the two best models.
-
-## Individual commands
-
-### Custom model progressive ablation
-
-The runs below add one technique at a time. Each row only changes
-one thing compared with the previous row, so any accuracy change
-between rows can be matched to that single technique.
-
-```bash
-# A. Baseline: nothing but the architecture.
-python -m pet_classifier.train \
-  --experiment-name custom_baseline \
-  --model custom --image-size 224 --batch-size 64 --epochs 80 \
-  --optimizer adamw --lr 1e-3 --dropout 0.3 \
-  --augmentation none --scheduler none \
-  --weight-decay 0.0 --label-smoothing 0.0 --mixup-alpha 0.0 \
-  --download --amp --test-at-end
-
-# B. + strong augmentation. This is the first ablation step,
-#    isolating the effect of data augmentation.
-python -m pet_classifier.train \
-  --experiment-name custom_aug \
-  --model custom --image-size 224 --batch-size 64 --epochs 80 \
-  --optimizer adamw --lr 1e-3 --dropout 0.3 \
-  --augmentation strong --scheduler none \
-  --weight-decay 0.0 --label-smoothing 0.0 --mixup-alpha 0.0 \
-  --download --amp --test-at-end
-
-# C. + warmup + cosine LR schedule.
-python -m pet_classifier.train \
-  --experiment-name custom_aug_sched \
-  --model custom --image-size 224 --batch-size 64 --epochs 80 \
-  --optimizer adamw --lr 1e-3 --dropout 0.3 \
-  --augmentation strong --scheduler cosine --warmup-epochs 3 \
-  --weight-decay 0.0 --label-smoothing 0.0 --mixup-alpha 0.0 \
-  --download --amp --test-at-end
-
-# D. + L2 weight decay.
-python -m pet_classifier.train \
-  --experiment-name custom_aug_sched_wd \
-  --model custom --image-size 224 --batch-size 64 --epochs 80 \
-  --optimizer adamw --lr 1e-3 --dropout 0.3 \
-  --augmentation strong --scheduler cosine --warmup-epochs 3 \
-  --weight-decay 1e-4 --label-smoothing 0.0 --mixup-alpha 0.0 \
-  --download --amp --test-at-end
-
-# E. + label smoothing.
-python -m pet_classifier.train \
-  --experiment-name custom_aug_sched_wd_ls \
-  --model custom --image-size 224 --batch-size 64 --epochs 80 \
-  --optimizer adamw --lr 1e-3 --dropout 0.3 \
-  --augmentation strong --scheduler cosine --warmup-epochs 3 \
-  --weight-decay 1e-4 --label-smoothing 0.1 --mixup-alpha 0.0 \
-  --download --amp --test-at-end
-
-# F. + Mixup.
-python -m pet_classifier.train \
-  --experiment-name custom_full \
-  --model custom --image-size 224 --batch-size 64 --epochs 80 \
-  --optimizer adamw --lr 1e-3 --dropout 0.3 \
-  --augmentation strong --scheduler cosine --warmup-epochs 3 \
-  --weight-decay 1e-4 --label-smoothing 0.1 --mixup-alpha 0.2 \
-  --download --amp --test-at-end
-
-# G. + EMA + cosine min_lr + TTA (best custom-model configuration).
-#    EMA and min_lr change training; TTA only runs at --test-at-end
-#    and gives an extra ``test_acc_tta`` number.
-#    This row is built on top of E (``custom_aug_sched_wd_ls``), not F
-#    (``custom_full``), because Mixup hurt val accuracy on this
-#    dataset and did not combine well with EMA. So ``--mixup-alpha``
-#    is set back to 0 here.
-python -m pet_classifier.train \
-  --experiment-name custom_full_ema \
-  --model custom --image-size 224 --batch-size 64 --epochs 80 \
-  --optimizer adamw --lr 1e-3 --dropout 0.3 \
-  --augmentation strong --scheduler cosine --warmup-epochs 3 \
-  --weight-decay 1e-4 --label-smoothing 0.1 --mixup-alpha 0.0 \
-  --ema --ema-decay 0.9999 --min-lr 1e-5 --tta \
-  --download --amp --test-at-end
-```
-
-`--pretrained` is off by default, so every custom-model run above trains
-from random initialisation. The `custom` model has no pretrained
-weights to load anyway, but the flag is left off explicitly so the
-saved `run_config.json` clearly shows that none were used.
-
-### ResNet-18 transfer learning
-
-```bash
-# Frozen backbone (feature extraction).
-python -m pet_classifier.train \
-  --experiment-name transfer_resnet18_frozen \
-  --model resnet18 --pretrained --freeze-backbone \
-  --image-size 224 --batch-size 32 --epochs 15 \
-  --augmentation basic \
-  --optimizer adamw --lr 1e-3 --weight-decay 1e-4 \
-  --scheduler cosine --warmup-epochs 1 --label-smoothing 0.1 \
-  --download --amp --test-at-end
-
-# Full fine-tune with differential LR.
-python -m pet_classifier.train \
-  --experiment-name transfer_resnet18_finetune \
-  --model resnet18 --pretrained \
-  --image-size 224 --batch-size 32 --epochs 15 \
-  --augmentation basic \
-  --optimizer adamw --lr 1e-4 --head-lr-mult 10 \
-  --weight-decay 1e-4 --scheduler cosine --warmup-epochs 1 \
-  --label-smoothing 0.1 \
-  --download --amp --test-at-end
-
-# Fine-tune + EMA + cosine min_lr + TTA (best transfer-learning configuration).
-python -m pet_classifier.train \
-  --experiment-name transfer_resnet18_finetune_ema \
-  --model resnet18 --pretrained \
-  --image-size 224 --batch-size 32 --epochs 15 \
-  --augmentation basic \
-  --optimizer adamw --lr 1e-4 --head-lr-mult 10 \
-  --weight-decay 1e-4 --scheduler cosine --warmup-epochs 1 \
-  --label-smoothing 0.1 \
-  --ema --ema-decay 0.999 --min-lr 1e-5 --tta \
-  --download --amp --test-at-end
-```
-
-`--lr 1e-4` is the backbone learning rate. `--head-lr-mult 10`
-gives the new classifier head an effective `1e-3`, so the fresh
-head trains faster than the pretrained backbone.
-
-## 5. Re-score an existing checkpoint
-
-```bash
-python -m pet_classifier.evaluate \
-  --checkpoint outputs/custom_full_*/best_model.pt \
-  --device auto
-```
-
-Produces fresh `validation_*` and `test_*` artifacts under an
-`evaluation/` sub-folder beside the checkpoint.
-
-## 6. Prediction and Grad-CAM visualisation
-
-```bash
-python -m pet_classifier.visualize \
-  --checkpoint outputs/transfer_resnet18_finetune_*/best_model.pt \
-  --num-samples 16 --filter incorrect --split val
-```
-
-Writes `predictions_grid_val_incorrect.png` and
-`gradcam_grid_val_incorrect.png` in a `visualisation/` folder next
-to the checkpoint. These grids show the model's mistakes: Grad-CAM
-on misclassified images reveals whether the model is looking at the
-animal or at the background.
-
-Set `--filter correct` or `--filter any` for the other views.
-
-## 7. Inference on new images
-
-```bash
-python -m pet_classifier.predict \
-  --checkpoint outputs/transfer_resnet18_finetune_*/best_model.pt \
-  --input /path/to/image_or_folder \
-  --output-csv predictions.csv \
-  --top-k 5
-```
-
-## 8. Notes on methodology
-
-* Validation accuracy is used to pick the best checkpoint. The
-  test split is only touched once at the end of each run (turned
-  on by `--test-at-end`), so the test number is an independent
-  check rather than something used for model selection.
-* The seven custom-CNN runs (A `custom_baseline` through G
-  `custom_full_ema`) only change one thing per row, so the
-  effect of each technique can be read off from row to row. A→B
-  is the augmentation step. C–F add LR scheduling, weight decay,
-  label smoothing and Mixup one at a time. G adds EMA + cosine
-  `min_lr` + TTA on top of E (skipping Mixup, which made things
-  worse). On the transfer side, `transfer_resnet18_frozen` vs
-  `transfer_resnet18_finetune` is the feature-extraction vs
-  full-fine-tune comparison from Lab 6, and
-  `transfer_resnet18_finetune_ema` adds the same EMA + `min_lr` +
-  TTA package on top of fine-tuning.
-* The default seed is 42. Use `--deterministic` for fully
-  reproducible runs, although it costs a bit of throughput.
-* `PetResNet` has about 2.7M parameters. The classifier is just
-  one `Linear(256, 37)` because the global average pooling already
-  reduces the feature map to 256 numbers, so a wider FC block is
-  not needed.
+- One seed per run. The differences between neighbouring custom-CNN rows (about 0.5 to 3
+  points) have no confidence intervals and may not all survive re-running.
+- The custom CNN is still under-trained at 80 epochs, with training accuracy around 63%. A longer
+  schedule, where EMA could also start to help, is the obvious next step.
